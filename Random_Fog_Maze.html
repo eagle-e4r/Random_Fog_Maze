@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Random Fog Maze</title>
+<style>
+  :root {
+    --bg: #f4f2ee;
+    --ink: #16171a;
+    --accent: #b3401f;
+    --muted: #7d7972;
+    --line: rgba(22,23,26,0.16);
+    --warp: #2f6690;
+    --panel-bg: rgba(250,248,244,0.92);
+    --shadow: 0 12px 40px rgba(22,23,26,0.14);
+    /* 統一ルール：文字サイズは3段階、字間は2種類、角丸は2種類、余白は2種類だけを使う */
+    --ui-font-size: 15px;          /* 標準 */
+    --fs-s: 13px;                  /* 小：手数・時間・凡例 */
+    --fs-l: 22px;                  /* 大：ゴール！ */
+    --track: 0.06em;               /* 標準の字間 */
+    --track-wide: 0.16em;          /* 強調の字間（SPACE・ゴール！） */
+    --radius-pill: 999px;          /* ボタン */
+    --radius-card: 16px;           /* ポップアップ */
+    --edge-x: 20px;                /* 画面左右の余白 */
+    --edge-y: 16px;                /* 画面上下の余白 */
+    --ease: .18s ease;
+    --fog-memory-alpha: 0.2;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16171a; --ink: #f4f2ee; --accent: #e0653a; --muted: #8b877f;
+      --line: rgba(244,242,238,0.2);
+      --warp: #6fa8dc;
+      --panel-bg: rgba(30,31,35,0.92);
+      --shadow: 0 12px 40px rgba(0,0,0,0.5);
+      --fog-memory-alpha: 0.44;
+    }
+  }
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  body { background: var(--bg); color: var(--ink); font-family: 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', 'Yu Gothic Medium', 'Yu Gothic', 'Segoe UI', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+
+  .panel {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.55em;
+    line-height: 1.35;
+    color: var(--muted);
+  }
+  .row { display: flex; gap: 0.8em; flex-wrap: wrap; align-items: center; }
+  .nowrap-row { flex-wrap: nowrap; white-space: nowrap; }
+  .hint .panel { min-width: 0; }
+  .size-row { row-gap: 0.35em; white-space: nowrap; } /* 幅が足りない画面では、ラベルの下にサイズ選択が回り込む */
+  #sizes { gap: 0.15em; padding: 0.15em; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+  #sizes button { padding: 0.3em 0.85em; }
+  .panel-label { letter-spacing: var(--track); }
+  button {
+    font-family: inherit;
+    font-size: var(--ui-font-size);
+    background: none;
+    color: var(--muted);
+    border: none;
+    padding: 0.35em 0.75em;
+    border-radius: var(--radius-pill);
+    letter-spacing: var(--track);
+    cursor: pointer;
+    transition: color var(--ease), background-color var(--ease), border-color var(--ease);
+    /* ダブルタップ判定で初回タップが無視される（モバイル）のを防ぐ */
+    touch-action: manipulation;
+  }
+  /* :hover はホバー可能なデバイス（マウス等）に限定する。タッチ端末で初回タップが
+     :hover 扱いになり、2回タップしないと反応しない現象を避けるため */
+  @media (hover: hover) and (pointer: fine) {
+    button:hover { color: var(--ink); }
+  }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* 選択中のサイズ：塗りのピルで一目で分かるように */
+  button.active { color: var(--bg); background: var(--ink); }
+
+  .outline-btn {
+    border: 1px solid var(--line);
+    color: var(--ink);
+    padding: 0.3em 0.85em;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .outline-btn:hover { border-color: var(--accent); color: var(--accent); background: none; }
+  }
+
+  .hint {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: calc(var(--edge-y) + env(safe-area-inset-top, 0px)) var(--edge-x) var(--edge-y);
+    font-size: var(--ui-font-size);
+    color: var(--muted);
+    line-height: 1.7;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1em;
+  }
+  .help-btn {
+    flex: none;
+    width: 2.2em;
+    height: 2.2em;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    padding: 0;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-style: italic;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .help-btn:hover { border-color: var(--accent); color: var(--accent); background: none; }
+  }
+
+  .help-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 30; /* 生成中ポップアップ(20)より前面 */
+    align-items: center;
+    justify-content: center;
+    pointer-events: none; /* 背後の操作をそのまま受け付ける */
+  }
+  .help-overlay.show { display: flex; }
+  /* ポップアップ共通の見た目 */
+  .help-popup, .win, .confirm, .loading {
+    background: var(--panel-bg);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow);
+    color: var(--ink);
+    padding: 1.7em 2.2em;
+    font-size: var(--ui-font-size);
+    letter-spacing: var(--track);
+    box-sizing: border-box;
+  }
+  /* 画面中央に置くポップアップ（transformでの中央寄せは半ピクセルずれて文字がぼやけるため、marginで中央寄せする） */
+  .win, .loading {
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    width: max-content;
+    height: max-content;
+    max-width: 94vw;
+  }
+  .help-popup {
+    animation: pop-in .2s ease;
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.2em;
+    align-items: center;
+    text-align: center;
+    line-height: 1.8;
+    max-width: min(94vw, 480px);
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+  .help-sec { align-self: stretch; text-align: left; }
+  .help-head { font-size: var(--fs-s); color: var(--muted); letter-spacing: var(--track); line-height: 1.6; margin-bottom: 0.2em; }
+  .help-list { list-style: none; margin: 0; padding: 0; line-height: 1.7; }
+  .hint-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 1.4em; line-height: 1.8; }
+  .hint-legend span { display: inline-flex; align-items: center; gap: 0.4em; white-space: nowrap; }
+  .hint-legend b { font-weight: normal; color: var(--ink); }
+  .help-popup svg { width: 1em; height: 1em; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  /* 文中でボタン名を示すカプセル（右下のボタンと同じ見た目） */
+  .btn-chip { display: inline-block; border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 0 0.55em; margin-right: 0.3em; line-height: 1.4; letter-spacing: var(--track-wide); color: var(--ink); }
+  .help-list .mk { display: inline-block; vertical-align: -0.15em; }
+  .ic-player { color: var(--ink); } .ic-player svg { fill: currentColor; stroke: none; }
+  .ic-goal { color: var(--accent); }
+  .ic-warp { color: var(--warp); }
+  /* 操作説明は使っている端末に合う方だけ表示（PC：キー操作／スマホ：タッチ操作） */
+  .for-touch { display: none; }
+  @media (hover: none), (pointer: coarse) {
+    .for-pc { display: none; }
+    .for-touch { display: list-item; }
+  }
+
+  .space-btn {
+    position: fixed;
+    right: var(--edge-x);
+    bottom: calc(var(--edge-y) + env(safe-area-inset-bottom, 0px));
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.15em;
+    line-height: 1.2;
+    padding: 0.55em 2.2em;
+    touch-action: none;
+    user-select: none;
+    color: var(--ink);
+    letter-spacing: var(--track-wide);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-pill);
+    background: var(--panel-bg);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .space-btn:hover { border-color: var(--accent); color: var(--accent); }
+  }
+  .space-btn:active,
+  .space-btn.active {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+  }
+
+  /* SPACEボタンはタッチ端末専用（PCはキーボードのスペースキーを使う） */
+  .space-btn { display: none; }
+  @media (hover: none), (pointer: coarse) {
+    .space-btn { display: flex; }
+  }
+
+  .bottom-center {
+    position: fixed;
+    left: var(--edge-x);
+    bottom: calc(var(--edge-y) + env(safe-area-inset-bottom, 0px));
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5em;
+  }
+
+  .stats-row { display: flex; gap: 1em; align-items: baseline; white-space: nowrap; } /* 手数・時間・最小手数を改行せず1行に */
+  .stats, .shortest-stats {
+    font-size: var(--fs-s);
+    color: var(--muted);
+    letter-spacing: var(--track);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .win {
+    animation: pop-in .2s ease;
+    display: none;
+    flex-direction: column;
+    gap: 1em;
+    align-items: center;
+    text-align: center;
+  }
+  .win .win-title { color: var(--accent); font-size: var(--fs-l); font-weight: 600; letter-spacing: var(--track-wide); }
+  .win .win-stats {
+    color: var(--ink);
+    line-height: 1.8;
+  }
+  /* ルート表示中の左下は、グレーではなく文字色（ライト：黒／ダーク：白系）で表示 */
+  .stats.review, .shortest-stats { color: var(--ink); }
+  .win .win-stats .best, .stats .best { color: var(--accent); font-weight: bold; }
+  .win-buttons, .confirm-buttons { display: flex; flex-direction: column; gap: 0.6em; width: 100%; align-items: stretch; }
+  .win button, .confirm button { white-space: nowrap; }
+
+  /* 「答えを見ますか？」確認ポップアップ：他のポップアップ(.win)と同じ見た目。背後の操作は受け付けない */
+  .confirm-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 25;
+    align-items: center;
+    justify-content: center;
+  }
+  .confirm-overlay.show { display: flex; }
+  .confirm {
+    animation: pop-in .2s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 1em;
+    align-items: center;
+    text-align: center;
+    max-width: 94vw;
+  }
+
+  .loading {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.9em;
+    pointer-events: none;
+    z-index: 20;
+    opacity: 0;
+    transition: opacity var(--ease);
+  }
+  .loading.show { display: flex; }
+  .loading.visible { opacity: 1; }
+  .loading .spinner {
+    width: 1.8em;
+    height: 1.8em;
+    border: 0.18em solid color-mix(in srgb, var(--muted) 35%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pop-in { from { opacity: 0; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .help-popup, .win, .confirm { animation: none; }
+    .loading .spinner { animation-duration: 1.6s; }
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hint">
+  <div class="panel">
+    <div class="row size-row">
+      <div class="panel-label">迷路の大きさ：</div>
+      <div class="row nowrap-row" id="sizes"></div>
+    </div>
+    <div class="row">
+      <button id="regen" class="outline-btn">新しい迷路を生成</button>
+      <button id="retireBtn" class="outline-btn">答えを見る</button>
+    </div>
+  </div>
+  <button id="helpBtn" class="help-btn" aria-label="操作説明">i</button>
+</div>
+<div class="help-overlay show" id="helpOverlay"><!-- 初回は説明を表示した状態で開く -->
+  <div class="help-popup" id="helpPopup">
+    <div class="help-sec">
+      <div class="help-head">ルール</div>
+      <ul class="help-list">
+        <li>自動生成の迷路ゲームです</li>
+        <li>目標：<span class="mk ic-goal"><svg viewBox="0 0 16 16"><path d="M4 4L12 12M12 4L4 12"/></svg></span>にたどり着く</li>
+        <li><span class="mk ic-warp"><svg viewBox="0 0 16 16"><path d="M8 2.5L13.5 8L8 13.5L2.5 8Z"/></svg></span>を通らないと、<span class="mk ic-goal"><svg viewBox="0 0 16 16"><path d="M4 4L12 12M12 4L4 12"/></svg></span>には行けません</li>
+      </ul>
+    </div>
+    <div class="help-sec">
+      <div class="help-head">操作方法</div>
+      <ul class="help-list">
+        <li class="for-pc">矢印キー：1マス進む</li>
+        <li class="for-pc">スペースを押しながら：壁まで進む</li>
+        <li class="for-touch">スワイプ：1マス進む</li>
+        <li class="for-touch"><span class="btn-chip">壁まで進む</span>オン：壁まで進む</li>
+      </ul>
+    </div>
+    <div class="hint-legend">
+      <span class="ic-player"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="4.2"/></svg><b>自分</b></span>
+      <span class="ic-goal"><svg viewBox="0 0 16 16"><path d="M4 4L12 12M12 4L4 12"/></svg><b>ゴール</b></span>
+      <span class="ic-warp"><svg viewBox="0 0 16 16"><path d="M8 2.5L13.5 8L8 13.5L2.5 8Z"/></svg><b>ワープゲート</b></span>
+    </div>
+    <button id="helpCloseBtn" class="outline-btn">閉じる</button>
+  </div>
+</div>
+<div class="win" id="win">
+  <div class="win-title">ゴール！</div>
+  <div class="win-stats" id="winStats"></div>
+  <div class="win-buttons">
+    <button id="reviewBtn" class="outline-btn">答えを見る</button>
+  </div>
+</div>
+<div class="confirm-overlay" id="confirmOverlay">
+  <div class="confirm" role="dialog" aria-modal="true">
+    <div>答えを見ますか？</div>
+    <div class="confirm-buttons">
+      <button id="confirmYes" class="outline-btn">答えを見る</button>
+      <button id="confirmNo" class="outline-btn">キャンセル</button>
+    </div>
+  </div>
+</div>
+<div class="loading" id="loading">
+  <div class="spinner"></div>
+  <div>生成中...</div>
+</div>
+
+<button class="space-btn" id="spaceBtn">
+  <span>壁まで進む</span>
+</button>
+
+<div class="bottom-center">
+  <div class="stats-row">
+    <div class="stats" id="stats">0手　0:00</div>
+    <div class="shortest-stats" id="shortestStats" style="display:none;"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // ==================== 設定値 ====================
+  const FOG_RADIUS_DEFAULT = 4.2;   // 視界（霧が晴れる範囲）の半径。単位はセル
+  // 開始時、視界のすぐ外側に「既に見た」扱いの薄いリングを出して霧の存在を伝える。
+  // 視界半径に足す値なので、難易度ごとの fogRadius に合わせて小さくなる
+  const FOG_PREVIEW_OFFSET_DEFAULT = 1.4;
+  const FLASH_MS = 600;             // ゴール/ワープ発見時のパルス演出の長さ
+
+  // 難易度ごとのセル数（short=短辺、long=長辺）。迷路は常に縦長（cols=short, rows=long）で生成し、
+  // 横長の画面では90°回転して表示する。画面サイズが変わっても迷路の構造は変わらない。
+  // fogRadius / fogPreviewOffset / memoryDecayMoves は難易度ごとの上書き値（省略時は既定値）。
+  // memoryDecayMoves は、見た場所の記憶が薄れて消えるまでの手数（省略時は消えない）
+  const DIFFICULTIES = [
+    { label: '小さい', short: 8, long: 16 },
+    { label: 'ふつう', short: 12, long: 24 },
+    { label: '大きい', short: 16, long: 32 },
+    { label: '特大', short: 24, long: 48, fogRadius: 3.2, fogPreviewOffset: 1.0, memoryDecayMoves: 18 }
+  ];
+  // 4方向（上・右・下・左の順）。wall=そのセルの壁名、opposite=隣のセル側の壁名
+  const DIRS = [
+    { wall: 'top',    opposite: 'bottom', di: 0,  dj: -1 },
+    { wall: 'right',  opposite: 'left',   di: 1,  dj: 0 },
+    { wall: 'bottom', opposite: 'top',    di: 0,  dj: 1 },
+    { wall: 'left',   opposite: 'right',  di: -1, dj: 0 }
+  ];
+  const DIR_MAP = { up: DIRS[0], right: DIRS[1], down: DIRS[2], left: DIRS[3] };
+  const WALL_ROTATE_CW = { top: 'right', right: 'bottom', bottom: 'left', left: 'top' };
+  const KEY_DIRS = {
+    arrowup: 'up', w: 'up', arrowdown: 'down', s: 'down',
+    arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right'
+  };
+
+  const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  // ==================== DOM参照 ====================
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const hintEl = document.querySelector('.hint');
+  const spaceBtn = document.getElementById('spaceBtn');
+  const bottomCenterEl = document.querySelector('.bottom-center');
+  const statsEl = document.getElementById('stats');
+  const shortestStatsEl = document.getElementById('shortestStats');
+  const retireBtnEl = document.getElementById('retireBtn');
+  const loadingEl = document.getElementById('loading');
+  const winEl = document.getElementById('win');
+  const winStatsEl = document.getElementById('winStats');
+  const helpOverlayEl = document.getElementById('helpOverlay');
+  const helpBtnEl = document.getElementById('helpBtn');
+  const helpPopupEl = document.getElementById('helpPopup');
+  const confirmOverlayEl = document.getElementById('confirmOverlay');
+
+  // ==================== 画面・レイアウトの状態 ====================
+  let w, h, dpr, cell = 32;          // 画面サイズ・解像度比・1セルのpx
+  let rotated = false;               // 横長の画面では迷路を90°回転して表示する
+  let dispCols = 24, dispRows = 12;  // 表示上の列数・行数（回転を反映）
+  let offsetX = 0, offsetY = 0;
+  // UIテキスト用に迷路の周囲へ確保する余白。実測値は computeOffsets() で更新する
+  let marginTop = 200, marginBottom = 20, marginSide = 20;
+
+  // ==================== 難易度・視界 ====================
+  let currentDiff = DIFFICULTIES[1];
+  function fogRadius() { return currentDiff.fogRadius || FOG_RADIUS_DEFAULT; }
+  function fogPreviewRadius() { return fogRadius() + (currentDiff.fogPreviewOffset ?? FOG_PREVIEW_OFFSET_DEFAULT); }
+  // 記憶が薄れるまでの手数。指定のない難易度は Infinity（一度見た場所はずっと残る）
+  function memoryDecayMoves() { return currentDiff.memoryDecayMoves || Infinity; }
+  // key のマスを「今、視界に入った」として記憶を更新する
+  function rememberNow(key) { seenAt.set(key, moveCount); }
+  // key のマスがまだ記憶に残っているか（視界外でも、最後に見てからの手数が閾値以内なら残る）
+  function isRemembered(key) {
+    const t = seenAt.get(key);
+    if (t === undefined) return false;
+    return (moveCount - t) <= memoryDecayMoves();
+  }
+
+  // ==================== 迷路生成の状態 ====================
+  let cols, rows, grid, stack, current, done = false;
+  let region, seedB, phase = 0;   // region: セルごとの領域(0/1)、seedB: 領域1の起点、phase: いま掘っている領域
+  let animId;
+
+  // ==================== プレイヤー・ゲーム進行の状態 ====================
+  let player = { i: 0, j: 0 };
+  let goal = { i: 0, j: 0 };
+  let doors = [];
+  let optimalMoves = 0;       // 最小手数（迷路の完成時に一度だけ計算）
+  let goalReached = false;
+  let reviewCleared = false;  // ルート表示に入る前にゴールできていたか（クリア／失敗の表示用）
+  let reviewMode = false, reviewPath = null;
+  let sliding = false;
+
+  // ==================== 霧・発見演出の状態 ====================
+  // key("i,j") -> そのマスを最後に視界内で見たときの手数（手数経過で記憶を薄れさせるためMapを使う）
+  let seenAt = new Map();
+  let discovered = new Set();   // 発見演出を再生済みのゴール/ワープゲートのkey
+  let goalFlashAt = null;
+  let doorFlashAt = [null, null];
+  let flashAnimId = null;
+
+  // ==================== 入力の状態 ====================
+  let spacePressed = false;   // スライド移動モード（PC：スペース押下中／スマホ：ボタンのオン・オフ）
+  let swipeStart = null;
+
+  // ==================== 手数・タイマーの状態 ====================
+  let moveCount = 0;
+  let timerStartAt = null;   // 最初の一手を動かした瞬間に計測開始
+  let timerStopAt = null;    // ゴールした瞬間に計測停止
+  let timerTickId = null;
+
+  // ==================== 生成中ポップアップ ====================
+  // すぐ終わる生成でも落ち着いて見えるよう、ぱっと出さずフェードで表示・非表示する
+  let loadingHideTimer = null;
+  function showLoading() {
+    clearTimeout(loadingHideTimer);
+    loadingEl.classList.add('show');
+    requestAnimationFrame(() => loadingEl.classList.add('visible')); // 次フレームで付けてフェードインさせる
+  }
+  function hideLoading() {
+    clearTimeout(loadingHideTimer);
+    loadingEl.classList.remove('visible');
+    loadingHideTimer = setTimeout(() => loadingEl.classList.remove('show'), 180);
+  }
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    w = window.innerWidth; h = window.innerHeight;
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function createCell(i, j) {
+    return { i, j, visited: false, walls: { top: true, right: true, bottom: true, left: true } };
+  }
+
+  // グリッド外なら -1
+  function idx(i, j) {
+    if (i < 0 || j < 0 || i >= cols || j >= rows) return -1;
+    return i + j * cols;
+  }
+
+  function randomItem(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+  // 領域 regionId 内の未訪問の隣接セルと、抜くべき壁の名前
+  function neighbors(c, regionId) {
+    const list = [];
+    for (const d of DIRS) {
+      const ni = idx(c.i + d.di, c.j + d.dj);
+      if (ni !== -1 && !grid[ni].visited && region[ni] === regionId) {
+        list.push({ cell: grid[ni], wall: d.wall, opposite: d.opposite });
+      }
+    }
+    return list;
+  }
+
+  // 2つの種からランダムに陣取り合戦をして、グリッドを有機的な形の2領域に分ける。
+  // 2領域をつなぐのはワープゲートだけ。分割比はおよそ1:3〜3:1になるよう重みづけする
+  function growRegions() {
+    const total = cols * rows;
+    const reg = new Array(total).fill(-1);
+    let sBi, sBj;
+    do {
+      sBi = Math.floor(Math.random() * cols);
+      sBj = Math.floor(Math.random() * rows);
+    } while (Math.hypot(sBi, sBj) < (cols + rows) / 3);
+    seedB = { i: sBi, j: sBj };
+    const sA = idx(0, 0), sB = idx(sBi, sBj);
+    reg[sA] = 0; reg[sB] = 1;
+    const frontier = [[sA], [sB]];
+    const ratio = 0.25 + Math.random() * 0.5; // 領域0の目標割合
+    while (frontier[0].length || frontier[1].length) {
+      let turn;
+      if (frontier[0].length && frontier[1].length) turn = Math.random() < ratio ? 0 : 1;
+      else turn = frontier[0].length ? 0 : 1;
+      const q = frontier[turn];
+      const pos = Math.floor(Math.random() * q.length);
+      const cur = q.splice(pos, 1)[0];
+      const ci = cur % cols, cj = Math.floor(cur / cols);
+      for (const { di, dj } of DIRS) {
+        const ni = ci + di, nj = cj + dj;
+        if (ni < 0 || nj < 0 || ni >= cols || nj >= rows) continue;
+        const nIdx = idx(ni, nj);
+        if (reg[nIdx] === -1) { reg[nIdx] = turn; frontier[turn].push(nIdx); }
+      }
+    }
+    return reg;
+  }
+
+  function measureMarginTop() {
+    return Math.ceil(hintEl.getBoundingClientRect().height);
+  }
+
+  // 下部コントロール（SPACEボタン・手数表示）の高さ分を確保し、迷路が下に潜り込まないようにする。
+  // 両者のうち上端が高い方に合わせる
+  function measureMarginBottom() {
+    const spaceHidden = getComputedStyle(spaceBtn).display === 'none';
+    const top = Math.min(
+      spaceHidden ? Infinity : spaceBtn.getBoundingClientRect().top,
+      bottomCenterEl.getBoundingClientRect().top
+    );
+    return Math.ceil(h - top) + 12;
+  }
+
+  // 迷路は難易度によらず同じ表示枠に収まる。グリッドが大きいほどセルを小さくし、
+  // 盤面は常に全体が見える（スクロールなし）
+  function computeCellSize() {
+    const fitW = (w - marginSide * 2) / dispCols;
+    const fitH = (h - marginTop - marginBottom) / dispRows;
+    return Math.min(fitW, fitH);
+  }
+
+  // 迷路内部の座標 → 画面上のセル左上のpx座標。
+  // 迷路は常に縦長（cols=short, rows=long）で生成し、横長の画面では時計回りに90°回転して表示する
+  function toScreenXY(ci, cj) {
+    let si, sj;
+    if (rotated) { si = rows - 1 - cj; sj = ci; }
+    else { si = ci; sj = cj; }
+    return { x: offsetX + si * cell, y: offsetY + sj * cell };
+  }
+
+  function screenWall(internalWall) {
+    return rotated ? WALL_ROTATE_CW[internalWall] : internalWall;
+  }
+
+  function computeOffsets() {
+    marginSide = parseFloat(cssVar('--edge-x')) || 20; // UIの左右余白とそろえる
+    marginBottom = measureMarginBottom();
+    marginTop = measureMarginTop();
+    rotated = w > h; // 横長の画面なら（短辺×長辺）の迷路を90°回転する
+    dispCols = rotated ? rows : cols;
+    dispRows = rotated ? cols : rows;
+    cell = computeCellSize();
+    offsetX = (w - dispCols * cell) / 2;
+    offsetY = marginTop + ((h - marginTop - marginBottom) - dispRows * cell) / 2;
+    if (winEl.style.display !== 'none') fitWinFontSize();
+  }
+
+  // ゴールのポップアップが画面に収まるよう、フォントサイズを一様に縮小する（基準サイズより大きくはしない）
+  function fitWinFontSize() {
+    winEl.style.fontSize = '';
+    const baseSize = parseFloat(getComputedStyle(winEl).fontSize);
+    const availW = w * 0.94;   // 画面端に触れないよう少し余白を残す
+    const availH = h * 0.9;
+    const naturalW = winEl.scrollWidth;   // 基準サイズでの実寸
+    const naturalH = winEl.scrollHeight;
+    const scale = Math.min(1, availW / naturalW, availH / naturalH);
+    winEl.style.fontSize = Math.floor(baseSize * scale) + 'px';
+  }
+
+  // 経過時間(ms)。最初の一手までは0、ゴール（または答え表示）後は停止した時間
+  function elapsedMs() {
+    if (!timerStartAt) return 0;
+    return (timerStopAt || performance.now()) - timerStartAt;
+  }
+
+  function formatTime(ms) {
+    const total = Math.floor(ms / 1000);
+    const m = Math.floor(total / 60), s = total % 60;
+    return m + ':' + String(s).padStart(2, '0');
+  }
+
+  // 手数のHTML。highlight のときは最小手数での達成として強調する
+  function movesHtml(highlight) {
+    return highlight ? '<span class="best">' + moveCount + '手</span>' : moveCount + '手';
+  }
+
+  function updateStats() {
+    // ルート表示中は「結果：クリア／失敗」を付け、最小手数でクリアしたときは手数を強調する
+    const prefix = reviewMode ? '結果：' + (reviewCleared ? 'クリア' : '失敗') + '　' : '';
+    const isBest = reviewMode && reviewCleared && moveCount === optimalMoves;
+    statsEl.classList.toggle('review', reviewMode);
+    statsEl.innerHTML = prefix + movesHtml(isBest) + '　' + formatTime(elapsedMs());
+  }
+
+  // 最初の一手でタイマーを開始する（2回目以降は何もしない）
+  function startTimer() {
+    if (timerStartAt) return;
+    timerStartAt = performance.now();
+    timerTickId = setInterval(updateStats, 250);
+  }
+
+  // タイマーを停止して時間を確定する
+  function stopTimer() {
+    if (timerStopAt) return;
+    timerStopAt = performance.now();
+    if (timerTickId) { clearInterval(timerTickId); timerTickId = null; }
+    updateStats();
+  }
+
+  function initMaze() {
+    cols = currentDiff.short;
+    rows = currentDiff.long;
+    grid = [];
+    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) grid.push(createCell(i, j));
+    region = growRegions();
+    current = grid[0];
+    current.visited = true;
+    stack = [];
+    phase = 0;
+    done = false;
+    resetPlayState();
+    retireBtnEl.style.display = 'none'; // 生成中は非表示。完成後に build() が再表示する
+
+    // ゴールとワープゲートの位置は完成後の壁配置で決まる（placeGoalAndDoors）。
+    // それまでは視界に入らない遠い座標に置いておく
+    goal = { i: -100, j: -100 };
+    doors = [{ i: -100, j: -100 }, { i: -100, j: -100 }];
+  }
+
+  // プレイヤー側の状態（位置・霧の記憶・手数・タイマー・答え表示）を初期化する。
+  // 迷路そのもの（grid / goal / doors）は変更しない
+  function resetPlayState() {
+    player = { i: 0, j: 0 };
+    goalReached = false;
+    reviewCleared = false;
+    // 開始位置の周囲、視界のすぐ外側までを「既に見た」（薄く表示）状態にしておき、
+    // 最初の一手の前から霧の効果が分かるようにする
+    seenAt = new Map();
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        if (Math.hypot(i, j) <= fogPreviewRadius()) seenAt.set(i + ',' + j, 0);
+      }
+    }
+    discovered = new Set();
+    goalFlashAt = null;
+    doorFlashAt = [null, null];
+    reviewMode = false;
+    reviewPath = null;
+    shortestStatsEl.style.display = 'none';
+    spaceBtn.style.visibility = '';
+    moveCount = 0;
+    timerStartAt = null;
+    timerStopAt = null;
+    if (timerTickId) { clearInterval(timerTickId); timerTickId = null; }
+    updateStats();
+    winEl.style.display = 'none';
+    computeOffsets();
+  }
+
+  // 開いている辺の数。1なら行き止まり
+  function openSideCount(c) {
+    return DIRS.filter(d => !c.walls[d.wall]).length;
+  }
+
+  // pool から、from と minDist 以上離れたセルをランダムに選ぶ。該当がなければ最も遠いセルを返す
+  // （領域の形によっては minDist を満たせないことがあるため、必ず何か返す）。avoidList のセルは除く
+  function pickFarCell(pool, from, minDist, avoidList) {
+    let best = null, bestDist = -1;
+    const candidates = [];
+    for (const p of pool) {
+      if (avoidList && avoidList.some(a => a.i === p.i && a.j === p.j)) continue;
+      const d = Math.hypot(p.i - from.i, p.j - from.j);
+      if (d >= minDist) candidates.push(p);
+      if (d > bestDist) { bestDist = d; best = p; }
+    }
+    if (candidates.length) return randomItem(candidates);
+    if (best) return best;
+    // avoidList で pool が空になった場合の保険（実際にはほぼ起こらない）。avoidList を無視して選ぶ
+    return randomItem(pool);
+  }
+
+  // 迷路の完成後にゴールとワープゲートを配置する。
+  // ゴールは完成後の壁配置から行き止まりに置く（通路の途中に置かない）。
+  // スタート側のゲートAも「中間ゴール」なので、同様に行き止まりを優先する。
+  // 2つの領域をつなぐのはワープゲートだけなので、ゲートは必ず正しい領域のセルから選ぶ
+  // （誤った領域に置くとゴールに到達できなくなる）。距離は「なるべく離す」という優先条件にとどめる。
+  function placeGoalAndDoors() {
+    const deadEndsRegion0 = [], deadEndsRegion1 = [];
+    const region0Cells = [], region1Cells = [];
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const isDeadEnd = openSideCount(grid[idx(i, j)]) === 1;
+        if (region[idx(i, j)] === 0) {
+          region0Cells.push({ i, j });
+          if (isDeadEnd) deadEndsRegion0.push({ i, j });
+        } else {
+          region1Cells.push({ i, j });
+          if (isDeadEnd) deadEndsRegion1.push({ i, j });
+        }
+      }
+    }
+
+    // ゴールは必ず領域1（ワープの向こう側）に置き、ワープなしでは到達できないようにする
+    goal = randomItem(deadEndsRegion1.length ? deadEndsRegion1 : region1Cells);
+
+    const minSep = Math.max(8, (cols + rows) / 3);
+    const doorA = pickFarCell(deadEndsRegion0.length ? deadEndsRegion0 : region0Cells, { i: 0, j: 0 }, minSep, [goal]);
+    const doorB = pickFarCell(region1Cells, goal, minSep, [doorA, goal]);
+    doors = [doorA, doorB];
+  }
+
+  function drawCellWalls(c) {
+    const { x, y } = toScreenXY(c.i, c.j);
+    ctx.beginPath();
+    for (const d of DIRS) {
+      if (c.walls[d.wall]) drawEdge(screenWall(d.wall), x, y);
+    }
+    ctx.stroke();
+  }
+
+  function drawEdge(edge, x, y) {
+    if (edge === 'top') { ctx.moveTo(x, y); ctx.lineTo(x + cell, y); }
+    else if (edge === 'right') { ctx.moveTo(x + cell, y); ctx.lineTo(x + cell, y + cell); }
+    else if (edge === 'bottom') { ctx.moveTo(x + cell, y + cell); ctx.lineTo(x, y + cell); }
+    else { ctx.moveTo(x, y + cell); ctx.lineTo(x, y); }
+  }
+
+  // ゴール/ワープゲートを初めて視界に捉えた瞬間に出す、広がりながら消えるリング
+  function drawDiscoveryPulse(cx, cy, startedAt, color) {
+    if (!startedAt) return;
+    const elapsed = performance.now() - startedAt;
+    if (elapsed >= FLASH_MS) return;
+    const t = elapsed / FLASH_MS;
+    ctx.globalAlpha = 1 - t;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, cell * (0.3 + t * 0.9), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // 2点間の細い点線。ルート表示中に、ワープゲート同士がつながっていることを示す
+  function drawDottedLine(x1, y1, x2, y2, dashLen) {
+    ctx.save();
+    ctx.setLineDash([dashLen, dashLen * 1.4]);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 発見演出のパルスがアニメーションするよう、しばらく再描画を続ける（プレイヤーが止まっていても動く）
+  function triggerFlashLoop() {
+    if (flashAnimId) return;
+    const tick = () => {
+      render();
+      const now = performance.now();
+      const active = (goalFlashAt && now - goalFlashAt < FLASH_MS) ||
+        doorFlashAt.some(t => t && now - t < FLASH_MS);
+      if (active) flashAnimId = requestAnimationFrame(tick);
+      else flashAnimId = null;
+    };
+    flashAnimId = requestAnimationFrame(tick);
+  }
+
+  // ゴール/ワープゲートの発見状態を更新し、「いま発見した」ときだけ true を返す。
+  // 記憶が完全に薄れたもの（特大のみ）は未発見に戻し、再発見時にもう一度演出を出す
+  function trackDiscovery(key, visible) {
+    if (reviewMode) return false;
+    if (visible) {
+      if (discovered.has(key)) return false;
+      discovered.add(key);
+      return true;
+    }
+    if (!isRemembered(key)) discovered.delete(key);
+    return false;
+  }
+
+  function render() {
+    const bg = cssVar('--bg'), ink = cssVar('--ink'), accent = cssVar('--accent'), warp = cssVar('--warp');
+    const fogMemoryAlpha = parseFloat(cssVar('--fog-memory-alpha')) || 0.2;
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // 壁：視界内は通常の濃さ、記憶に残るマスは薄く、それ以外は描かない（ルート表示中は全部）
+    for (const c of grid) {
+      const key = c.i + ',' + c.j;
+      let alpha;
+      if (reviewMode) {
+        alpha = 1;
+      } else {
+        const dist = Math.hypot(c.i - player.i, c.j - player.j);
+        if (dist <= fogRadius()) { alpha = 1; rememberNow(key); }
+        else if (isRemembered(key)) { alpha = fogMemoryAlpha; }
+        else { continue; }
+      }
+      ctx.globalAlpha = alpha;
+      drawCellWalls(c);
+    }
+    ctx.globalAlpha = 1;
+
+    // ルート表示中：2つの領域の境界を太線で強調する
+    if (reviewMode) {
+      ctx.lineWidth = 5;
+      for (const c of grid) {
+        const ci = idx(c.i, c.j);
+        const right = idx(c.i + 1, c.j);
+        const bottom = idx(c.i, c.j + 1);
+        const { x, y } = toScreenXY(c.i, c.j);
+        if (right !== -1 && region[right] !== region[ci]) {
+          ctx.beginPath(); drawEdge(screenWall('right'), x, y); ctx.stroke();
+        }
+        if (bottom !== -1 && region[bottom] !== region[ci]) {
+          ctx.beginPath(); drawEdge(screenWall('bottom'), x, y); ctx.stroke();
+        }
+      }
+    }
+
+    // ゴール：発見するまで非表示（ルート表示中は常に表示）
+    const goalKey = goal.i + ',' + goal.j;
+    const goalVisible = reviewMode || Math.hypot(goal.i - player.i, goal.j - player.j) <= fogRadius();
+    if (trackDiscovery(goalKey, goalVisible)) { goalFlashAt = performance.now(); triggerFlashLoop(); }
+    if (goalVisible || isRemembered(goalKey)) {
+      const { x, y } = toScreenXY(goal.i, goal.j);
+      const gx = x + cell / 2, gy = y + cell / 2;
+      const gr = cell * 0.22;
+      ctx.globalAlpha = goalVisible ? 1 : fogMemoryAlpha;
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(gx - gr, gy - gr); ctx.lineTo(gx + gr, gy + gr);
+      ctx.moveTo(gx + gr, gy - gr); ctx.lineTo(gx - gr, gy + gr);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      drawDiscoveryPulse(gx, gy, goalFlashAt, accent);
+    }
+
+    // ワープゲート：ゴールと同じ霧のルール
+    doors.forEach((d, n) => {
+      const key = d.i + ',' + d.j;
+      const visible = reviewMode || Math.hypot(d.i - player.i, d.j - player.j) <= fogRadius();
+      if (trackDiscovery(key, visible)) { doorFlashAt[n] = performance.now(); triggerFlashLoop(); }
+      if (!visible && !isRemembered(key)) return;
+      const { x, y } = toScreenXY(d.i, d.j);
+      const dx = x + cell / 2, dy = y + cell / 2;
+      const r = cell * 0.22;
+      ctx.globalAlpha = visible ? 1 : fogMemoryAlpha;
+      ctx.strokeStyle = warp;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(dx, dy - r); ctx.lineTo(dx + r, dy); ctx.lineTo(dx, dy + r); ctx.lineTo(dx - r, dy);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      drawDiscoveryPulse(dx, dy, doorFlashAt[n], warp);
+    });
+
+    // ルート表示中：2つのワープゲートを結ぶ細い点線
+    // （最短ルートの線は、隣り合わないゲート間を飛ばして描くため）
+    if (reviewMode) {
+      const a = toScreenXY(doors[0].i, doors[0].j);
+      const b = toScreenXY(doors[1].i, doors[1].j);
+      ctx.strokeStyle = warp;
+      ctx.globalAlpha = 0.6;
+      ctx.lineWidth = 1.4;
+      drawDottedLine(a.x + cell / 2, a.y + cell / 2, b.x + cell / 2, b.y + cell / 2, Math.max(3, cell * 0.14));
+      ctx.globalAlpha = 1;
+    }
+
+    // ルート表示中：最短ルート（隣り合わないセル間、つまりワープゲート間は線を引かない）
+    if (reviewMode && reviewPath) {
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      reviewPath.forEach((p, n) => {
+        const { x: sx, y: sy } = toScreenXY(p.i, p.j);
+        const x = sx + cell / 2, y = sy + cell / 2;
+        const prev = reviewPath[n - 1];
+        if (n > 0 && Math.abs(p.i - prev.i) + Math.abs(p.j - prev.j) === 1) {
+          ctx.lineTo(x, y);
+        } else {
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+        }
+      });
+      ctx.stroke();
+    }
+
+    if (done) {
+      // 自分のマーカー。ゴール/ワープゲートと区別できるよう、アクセント色ではなく文字色で描く
+      const { x, y } = toScreenXY(player.i, player.j);
+      ctx.fillStyle = ink;
+      ctx.beginPath();
+      ctx.arc(x + cell / 2, y + cell / 2, cell * 0.26, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // 1フレームあたり数ステップずつ迷路を掘り進める（深さ優先探索）。領域0を掘り終えたら領域1へ移る
+  function build() {
+    const iterations = 4;
+    for (let n = 0; n < iterations; n++) {
+      const avail = neighbors(current, phase);
+      if (avail.length > 0) {
+        const pick = randomItem(avail);
+        current.walls[pick.wall] = false;
+        pick.cell.walls[pick.opposite] = false;
+        stack.push(current);
+        current = pick.cell;
+        current.visited = true;
+      } else if (stack.length > 0) {
+        current = stack.pop();
+      } else if (phase === 0) {
+        phase = 1;
+        current = grid[idx(seedB.i, seedB.j)];
+        current.visited = true;
+        stack = [];
+      } else {
+        done = true;
+        break;
+      }
+    }
+    render();
+    if (!done) {
+      animId = requestAnimationFrame(build);
+    } else {
+      placeGoalAndDoors();
+      optimalMoves = computeOptimalMoves();
+      render();
+      retireBtnEl.style.display = '';
+      hideLoading();
+    }
+  }
+
+  // 画面上で押された方向を、迷路内部の方向に変換する
+  // （表示が回転していても、迷路のデータ自体は回転しない）
+  function internalDir(screenDirKey) {
+    const s = DIR_MAP[screenDirKey];
+    if (!rotated) return s;
+    // 時計回り90°表示の逆変換： (di, dj) -> (dj, -di)
+    return DIRS.find(d => d.di === s.dj && d.dj === -s.di);
+  }
+
+  function checkGoal() {
+    if (reviewMode) return false;
+    if (player.i !== goal.i || player.j !== goal.j) return false;
+    goalReached = true;
+    closeConfirm();
+    stopTimer();
+    winStatsEl.innerHTML =
+      '<div>結果：' + movesHtml(moveCount === optimalMoves) + '　' + formatTime(elapsedMs()) + '</div>' +
+      '<div>最小手数：' + optimalMoves + '手</div>';
+    winEl.style.display = 'block';
+    fitWinFontSize();
+    return true;
+  }
+
+  // ワープゲートの上にいれば、相方のゲートへ移動する。移動したら true
+  function checkDoor() {
+    const doorIdx = doors.findIndex(d => d.i === player.i && d.j === player.j);
+    if (doorIdx === -1) return false;
+    const partnerIdx = 1 - doorIdx;
+    player.i = doors[partnerIdx].i; player.j = doors[partnerIdx].j;
+    // ワープを使うたびに両端でパルスを出す（初発見のときだけではない）
+    doorFlashAt[doorIdx] = doorFlashAt[partnerIdx] = performance.now();
+    triggerFlashLoop();
+    return true;
+  }
+
+  // ==================== 最短ルート探索 ====================
+  // 手数は「1マス移動も、スライド1回も、1手」と数えるため、通ったセル数が最少のルートと
+  // 手数が最少のルートは一致しないことがある（曲がり角を行き過ぎて1マス戻る方が少ない手数で済む場合など）。
+  // そこでセルではなく「操作（1マス移動/スライド × 4方向）」を辺として探索する。
+  // 移動規則は stepMove() / slideMove() と同じで、ワープは到達した瞬間に操作を打ち切る。
+
+  // (i,j) に着地した後の最終位置。ワープゲートなら相方の位置（checkDoor と同じ）
+  function resolveCell(i, j) {
+    const doorIdx = doors.findIndex(d => d.i === i && d.j === j);
+    if (doorIdx === -1) return { i, j };
+    const partner = doors[1 - doorIdx];
+    return { i: partner.i, j: partner.j };
+  }
+
+  // (i,j) から dir 方向へ1回操作（1マス移動 or スライド）した結果を返す。
+  // 通過したセルを順に並べた配列（ルートをセル単位で描けるように）で、
+  // 1マスも動けなければ null（実際の操作でも手数に数えない）。
+  // ワープゲートかゴールに到達した時点で、スライド中でも操作は打ち切られる
+  function simulateAction(i, j, dir, slide) {
+    const trace = [];
+    let ci = i, cj = j;
+    do {
+      const c = grid[idx(ci, cj)];
+      if (c.walls[dir.wall]) break;
+      ci += dir.di; cj += dir.dj;
+      trace.push({ i: ci, j: cj });
+      const resolved = resolveCell(ci, cj);
+      if (resolved.i !== ci || resolved.j !== cj) {
+        ci = resolved.i; cj = resolved.j;
+        trace.push({ i: ci, j: cj });
+        break; // ワープは1マス移動でもスライドでも、その場で操作を打ち切る
+      }
+      if (ci === goal.i && cj === goal.j) break; // ゴール到達も同様に、その場で打ち切る
+    } while (slide);
+    return trace.length ? trace : null;
+  }
+
+  // 「1回の操作」を辺とするBFS。手数の数え方は実際のプレイ（moveCount）と一致する。
+  // 返すのは最小手数のみ。画面に描くルートは別の computeShortestCellPath() を使う
+  // （行き過ぎて戻る動きまで描くと、かえって分かりにくいため）
+  function computeOptimalMoves() {
+    const total = cols * rows;
+    const startIdx = idx(0, 0), goalIdx = idx(goal.i, goal.j);
+    const dist = new Array(total).fill(-1);
+    dist[startIdx] = 0;
+    const queue = [{ i: 0, j: 0 }];
+    let qi = 0;
+    while (qi < queue.length) {
+      const cur = queue[qi++];
+      const curIdx = idx(cur.i, cur.j);
+      if (curIdx === goalIdx) break;
+      for (const dir of DIRS) {
+        for (const slide of [false, true]) {
+          const trace = simulateAction(cur.i, cur.j, dir, slide);
+          if (!trace) continue;
+          const end = trace[trace.length - 1];
+          const endIdx = idx(end.i, end.j);
+          if (dist[endIdx] === -1) {
+            dist[endIdx] = dist[curIdx] + 1;
+            queue.push(end);
+          }
+        }
+      }
+    }
+    return dist[goalIdx];
+  }
+
+  // 通るセル数が最少の経路（1マス移動/スライドの区別はなく、2つのワープゲートは直接つながっているとみなす）。
+  // 画面に描くルート専用。最小手数のルートよりゴールへの直線的な経路の方が分かりやすいため
+  function computeShortestCellPath() {
+    const total = cols * rows;
+    const startIdx = idx(0, 0), goalIdx = idx(goal.i, goal.j);
+    const doorAIdx = idx(doors[0].i, doors[0].j), doorBIdx = idx(doors[1].i, doors[1].j);
+    const prev = new Array(total).fill(-1);
+    const visited = new Array(total).fill(false);
+    const q = [startIdx];
+    visited[startIdx] = true;
+    while (q.length) {
+      const curIdx = q.shift();
+      if (curIdx === goalIdx) break;
+      const c = grid[curIdx];
+      for (const d of DIRS) {
+        if (c.walls[d.wall]) continue;
+        const nIdx = idx(c.i + d.di, c.j + d.dj);
+        if (nIdx !== -1 && !visited[nIdx]) { visited[nIdx] = true; prev[nIdx] = curIdx; q.push(nIdx); }
+      }
+      if (curIdx === doorAIdx && !visited[doorBIdx]) { visited[doorBIdx] = true; prev[doorBIdx] = curIdx; q.push(doorBIdx); }
+      if (curIdx === doorBIdx && !visited[doorAIdx]) { visited[doorAIdx] = true; prev[doorAIdx] = curIdx; q.push(doorAIdx); }
+    }
+    const path = [];
+    let cur = goalIdx;
+    while (cur !== -1) { path.push(grid[cur]); cur = prev[cur]; }
+    path.reverse();
+    return path;
+  }
+
+  // 操作を受け付けられる状態か（ゴール後はルート表示中のみ）
+  function canMove() { return done && (!goalReached || reviewMode); }
+
+  // 1手ぶんの処理（タイマー開始・手数加算・表示更新）
+  function countMove() { startTimer(); moveCount++; updateStats(); }
+
+  // 1マスだけ進む
+  function stepMove(dir) {
+    if (!canMove()) return;
+    const c = grid[idx(player.i, player.j)];
+    const m = internalDir(dir);
+    if (!m || c.walls[m.wall]) return;
+    player.i += m.di; player.j += m.dj;
+    if (!goalReached) countMove();
+    checkDoor();
+    render();
+    checkGoal();
+  }
+
+  // 壁・ワープゲート・ゴールのどれかで止まるまでスライドして進む
+  function slideMove(dir) {
+    if (!canMove() || sliding) return;
+    const m = internalDir(dir);
+    if (!m) return;
+    sliding = true;
+    let moved = false;
+    const advance = () => {
+      const c = grid[idx(player.i, player.j)];
+      if (c.walls[m.wall]) { sliding = false; return; }
+      player.i += m.di; player.j += m.dj;
+      if (!moved && !goalReached) { moved = true; countMove(); }
+      if (checkDoor()) { render(); sliding = false; checkGoal(); return; }
+      render();
+      if (checkGoal()) { sliding = false; return; }
+      setTimeout(advance, 18);
+    };
+    advance();
+  }
+
+  // スライドモードがオンなら壁まで、オフなら1マス進む
+  function move(dir) {
+    if (spacePressed) slideMove(dir); else stepMove(dir);
+  }
+
+  function regen() {
+    cancelAnimationFrame(animId);
+    showLoading();
+    initMaze();
+    build();
+  }
+
+  function buildSizeButtons() {
+    const wrap = document.getElementById('sizes');
+    wrap.innerHTML = '';
+    DIFFICULTIES.forEach(d => {
+      const b = document.createElement('button');
+      b.textContent = d.label;
+      if (d === currentDiff) b.classList.add('active');
+      b.onclick = () => {
+        if (d === currentDiff) return;
+        currentDiff = d;
+        document.querySelectorAll('#sizes button').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+      };
+      wrap.appendChild(b);
+    });
+  }
+
+  // ==================== キーボード・タッチ入力 ====================
+  const isSpaceKey = (key) => key === ' ' || key === 'spacebar';
+
+  window.addEventListener('keydown', (e) => {
+    const key = e.key.toLowerCase();
+    // 確認ポップアップの表示中は、移動などのキー操作を受け付けない（Escでキャンセル）
+    if (isConfirmOpen()) { if (key === 'escape') closeConfirm(); e.preventDefault(); return; }
+    if (isSpaceKey(key)) { spacePressed = true; e.preventDefault(); return; }
+    const dir = KEY_DIRS[key];
+    if (!dir) return;
+    move(dir);
+    e.preventDefault();
+  });
+  window.addEventListener('keyup', (e) => {
+    if (isSpaceKey(e.key.toLowerCase())) spacePressed = false;
+  });
+
+  // タッチ端末では、スペースキーを押し続ける代わりに「壁まで進む」ボタンでスライドモードを切り替える
+  // （1回タップでオン＝ボタンが点灯、もう一度タップでオフ。長押しは不要）
+  function setSpacePressed(v) {
+    spacePressed = v;
+    spaceBtn.classList.toggle('active', v);
+  }
+  spaceBtn.addEventListener('pointerdown', (e) => e.preventDefault());
+  spaceBtn.addEventListener('pointerup', (e) => { e.preventDefault(); setSpacePressed(!spacePressed); });
+
+  // スワイプ：ドラッグして離した方向へ移動する（スライドモードがオンなら壁まで）
+  canvas.addEventListener('pointerdown', (e) => { swipeStart = { x: e.clientX, y: e.clientY }; });
+  canvas.addEventListener('pointerup', (e) => {
+    if (!swipeStart) return;
+    const dx = e.clientX - swipeStart.x, dy = e.clientY - swipeStart.y;
+    swipeStart = null;
+    if (Math.hypot(dx, dy) < 20) return;
+    move(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+  });
+
+  // ==================== ボタン・ポップアップ ====================
+  document.getElementById('regen').onclick = regen;
+
+  // 説明ポップアップ：「i」ボタンで開閉する。ポップアップの外を触るか、何かキーを押すと自動で閉じる
+  // （その操作自体は通常どおり実行される）
+  const closeHelp = () => helpOverlayEl.classList.remove('show');
+  helpBtnEl.onclick = () => helpOverlayEl.classList.toggle('show');
+  document.getElementById('helpCloseBtn').onclick = closeHelp;
+  window.addEventListener('pointerdown', (e) => {
+    if (!helpOverlayEl.classList.contains('show')) return;
+    if (helpPopupEl.contains(e.target) || helpBtnEl.contains(e.target)) return;
+    closeHelp();
+  }, true);
+  window.addEventListener('keydown', closeHelp, true);
+
+  // 答えを見る（ルート表示）。ゴール後の「答えを見る」ボタンと、リタイアの両方で使う。
+  // リタイアは、ゴール後にルートを見るのと同じ状態になる
+  function enterReviewMode() {
+    reviewCleared = goalReached; // 自力でゴールしていればクリア、答えを見て入ったなら失敗
+    goalReached = true;
+    stopTimer();
+    reviewMode = true;
+    reviewPath = computeShortestCellPath();
+    winEl.style.display = 'none';
+    retireBtnEl.style.display = 'none';
+    shortestStatsEl.textContent = '最小手数：' + optimalMoves + '手';
+    shortestStatsEl.style.display = 'block';
+    updateStats();
+    // 左下の1行が長くなり右下ボタンと重なるため、ルート表示中はボタンを隠す（場所は確保したまま）
+    spaceBtn.style.visibility = 'hidden';
+    render();
+  }
+  document.getElementById('reviewBtn').onclick = enterReviewMode;
+
+  // 一歩でも進んでいたら、答えを見る前に確認ポップアップを出す
+  // （一歩も進んでいない場合、およびゴール後は確認なしで表示）
+  function isConfirmOpen() { return confirmOverlayEl.classList.contains('show'); }
+  function openConfirm() { confirmOverlayEl.classList.add('show'); }
+  function closeConfirm() { confirmOverlayEl.classList.remove('show'); }
+  retireBtnEl.onclick = () => {
+    if (!done || reviewMode) return;
+    if (moveCount > 0 && !goalReached) openConfirm();
+    else enterReviewMode();
+  };
+  document.getElementById('confirmYes').onclick = () => {
+    closeConfirm();
+    if (done && !reviewMode) enterReviewMode();
+  };
+  document.getElementById('confirmNo').onclick = closeConfirm;
+  // ポップアップの外側をタップしてもキャンセル
+  confirmOverlayEl.addEventListener('pointerdown', (e) => { if (e.target === confirmOverlayEl) closeConfirm(); });
+  window.addEventListener('resize', () => { resize(); computeOffsets(); render(); });
+
+  buildSizeButtons();
+  resize();
+  regen();
+})();
+</script>
+</body>
+</html>
